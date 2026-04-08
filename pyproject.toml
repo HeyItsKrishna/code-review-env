@@ -25,7 +25,7 @@ dev = [
 ]
 
 [project.scripts]
-server = "server:app"
+server = "server.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -34,4 +34,4 @@ include = ["environment*", "tasks*", "graders*"]
 [openenv]
 name = "code-review-env"
 version = "1.0.0"
-entrypoint = "server:app"
+entrypoint = "server.app:main"
