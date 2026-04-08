@@ -22,13 +22,14 @@ from openai import OpenAI
 API_BASE_URL     = os.getenv("API_BASE_URL", "https://KrishnaAIX-KrishnaAIX.hf.space")
 MODEL_NAME       = os.getenv("MODEL_NAME",   "llama-3.3-70b-versatile")
 HF_TOKEN         = os.getenv("HF_TOKEN")
+GROQ_API_KEY     = os.getenv("GROQ_API_KEY", HF_TOKEN)
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-API_BASE_URL = API_BASE_URL.rstrip("/")
-DIFFICULTIES = ["easy", "medium", "hard"]
+API_BASE_URL     = API_BASE_URL.rstrip("/")
+DIFFICULTIES     = ["easy", "medium", "hard"]
 
 client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
-    api_key=os.getenv("GROQ_API_KEY", HF_TOKEN),
+    api_key=GROQ_API_KEY or "dummy",
 )
 
 def env_reset(difficulty: str) -> Dict[str, Any]:
@@ -145,36 +146,33 @@ def parse_action(text: str) -> Dict[str, Any]:
 
 
 def run_episode(difficulty: str) -> float:
+    # Always print START - even if everything fails
+    session_id = "error"
     try:
         reset_data = env_reset(difficulty)
         session_id = reset_data["session_id"]
         obs        = reset_data["observation"]
-    except Exception as e:
-        session_id = "error"
         print(f"[START] task={difficulty} session={session_id}", flush=True)
-        print(f"[STEP] step=1 action=error reward=0.0 done=True", flush=True)
+    except Exception as e:
+        print(f"[START] task={difficulty} session={session_id}", flush=True)
+        print(f"[STEP] step=1 action=finish_review reward=0.0 done=True", flush=True)
         print(f"[END] task={difficulty} session={session_id} score=0.0000", flush=True)
         return 0.0
-
-    print(f"[START] task={difficulty} session={session_id}", flush=True)
 
     messages: List[Dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     done        = False
     final_score = 0.0
     step_num    = 0
-    decision_set = False
 
     while not done:
         step_num += 1
 
-        # Force finish if we are running long
         if step_num > 6:
             action = {"action_type": "finish_review", "reasoning": "max steps reached"}
         else:
             user_msg = build_user_message(obs)
             messages.append({"role": "user", "content": user_msg})
 
-            # Force set_review_decision before finish
             comments_so_far = obs.get("review_comments_so_far", [])
             current_decision = obs.get("review_decision")
 
@@ -188,16 +186,14 @@ def run_episode(difficulty: str) -> float:
                 response_text = completion.choices[0].message.content or ""
             except Exception as e:
                 print(f"[STEP] step={step_num} action=error reward=0.0 done=False", flush=True)
-                response_text = '{"action_type": "finish_review"}'
+                response_text = '{"action_type": "finish_review", "reasoning": "llm unavailable"}'
 
             messages.append({"role": "assistant", "content": response_text})
             action = parse_action(response_text)
 
-            # Safety: if decision already set and agent tries to add more comments, force finish
             if current_decision and action.get("action_type") == "add_comment":
                 action = {"action_type": "finish_review", "reasoning": "decision already set"}
 
-            # Safety: if too many comments already, force decision then finish
             if len(comments_so_far) >= 3 and action.get("action_type") == "add_comment":
                 action = {"action_type": "finish_review", "reasoning": "enough comments"}
 
@@ -241,7 +237,9 @@ def main() -> int:
         try:
             score = run_episode(difficulty)
         except Exception as e:
-            print(f"[END] task={difficulty} session=error score=0.0", flush=True)
+            print(f"[START] task={difficulty} session=error", flush=True)
+            print(f"[STEP] step=1 action=finish_review reward=0.0 done=True", flush=True)
+            print(f"[END] task={difficulty} session=error score=0.0000", flush=True)
             score = 0.0
         scores[difficulty] = score
 
