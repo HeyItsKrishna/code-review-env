@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "code-review-env"
+version = "1.0.0"
+description = "Production-grade OpenEnv environment for AI code review agents"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.5",
+    "uvicorn[standard]==0.32.1",
+    "pydantic==2.10.3",
+    "openai==1.57.4",
+    "requests==2.32.3",
+    "PyYAML==6.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["environment*", "tasks*", "graders*"]
+
+[openenv]
+name = "code-review-env"
+version = "1.0.0"
+entrypoint = "server:app"
