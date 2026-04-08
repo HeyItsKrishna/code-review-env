@@ -1,11 +1,12 @@
 ---
-title: KrishnaAIX
-emoji: 🏢
+title: CodeReview OpenEnv
+emoji: 🔍
 colorFrom: blue
-colorTo: purple
+colorTo: green
 sdk: docker
 pinned: false
 license: mit
+short_description: "AI pull request code review environment — OpenEnv compliant"
 ---
 
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+See README.md for full documentation.
