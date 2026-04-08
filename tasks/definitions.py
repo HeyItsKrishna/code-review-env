@@ -33,7 +33,7 @@ EASY_PR = PullRequest(
 +import hashlib
 +import os
 +
-+SECRET_KEY = "mysecretkey123"  # hardcoded secret
++SECRET_KEY = "mysecretkey123"
 +
 +def validate_token(token: str) -> dict:
 +    """Validate a JWT token and return the payload."""
@@ -43,15 +43,15 @@ EASY_PR = PullRequest(
 +    except jwt.ExpiredSignatureError:
 +        return {}
 +    except Exception:
-+        return {}  # silences ALL exceptions including invalid tokens
++        return {}
 +
 +def hash_password(password: str) -> str:
 +    """Hash a password for storage."""
-+    return hashlib.md5(password.encode()).hexdigest()  # MD5 is insecure
++    return hashlib.md5(password.encode()).hexdigest()
 +
 +def check_role(user: dict, required_role: str) -> bool:
 +    """Check if user has required role."""
-+    return user["role"] == required_role  # KeyError if 'role' missing
++    return user["role"] == required_role
 +
 +def get_admin_users() -> list:
 +    """Return all admin users from DB."""
@@ -60,7 +60,7 @@ EASY_PR = PullRequest(
 +    cursor = conn.cursor()
 +    query = f"SELECT * FROM users WHERE role = 'admin'"
 +    cursor.execute(query)
-+    return cursor.fetchall()  # connection never closed
++    return cursor.fetchall()
 ''',
         ),
     ],
@@ -151,7 +151,6 @@ MEDIUM_PR = PullRequest(
 +MAX_RETRIES = 3
 +BATCH_SIZE = 100
 +
-+# Global session — not thread/coroutine-safe initialisation
 +session: aiohttp.ClientSession = None
 +
 +async def init_session():
@@ -168,11 +167,11 @@ MEDIUM_PR = PullRequest(
 +                    await asyncio.sleep(2 ** attempt)
 +        except aiohttp.ClientError as e:
 +            logging.warning(f"Attempt {attempt} failed: {e}")
-+    return {}  # silently returns empty dict on failure
++    return {}
 +
 +async def process_batch(records: List[str], url: str) -> List[Dict]:
 +    tasks = [fetch_record(url, rid) for rid in records]
-+    results = await asyncio.gather(*tasks)  # no return_exceptions=True
++    results = await asyncio.gather(*tasks)
 +    return list(results)
 +
 +async def ingest_all(record_ids: List[str], url: str) -> Dict[str, int]:
@@ -187,12 +186,11 @@ MEDIUM_PR = PullRequest(
 +        processed += len([r for r in results if r])
 +        failed += len([r for r in results if not r])
 +
-+    # session never closed
 +    return {"processed": processed, "failed": failed, "total": total}
 +
 +def run_ingestion(record_ids: List[str], url: str) -> Dict[str, int]:
 +    """Synchronous entry point."""
-+    loop = asyncio.get_event_loop()  # deprecated pattern; may reuse closed loop
++    loop = asyncio.get_event_loop()
 +    return loop.run_until_complete(ingest_all(record_ids, url))
 ''',
         ),
@@ -211,9 +209,6 @@ MEDIUM_PR = PullRequest(
 +    result = run_ingestion([], "http://example.com")
 +    assert result["total"] == 0
 +
-+# NOTE: No mocking of network calls — tests will hit real network
-+# NOTE: No test for partial failure scenarios
-+# NOTE: No test for retry logic
 +def test_basic_ingestion():
 +    result = run_ingestion(["id1", "id2"], "http://fake-api.test")
 +    assert "processed" in result
@@ -312,29 +307,26 @@ HARD_PR = PullRequest(
 +        self.default_ttl = default_ttl
 +
 +    def _make_key(self, tenant_id: str, key: str) -> str:
-+        # VULNERABILITY: no sanitisation — tenant_id="*" could match all keys
 +        return f"cache:{tenant_id}:{key}"
 +
 +    def get(self, tenant_id: str, key: str) -> Optional[Any]:
 +        raw = self.client.get(self._make_key(tenant_id, key))
 +        if raw is None:
 +            return None
-+        return json.loads(raw)  # deserialises untrusted data without validation
++        return json.loads(raw)
 +
 +    def set(self, tenant_id: str, key: str, value: Any,
 +            ttl: Optional[int] = None) -> bool:
 +        cache_key = self._make_key(tenant_id, key)
 +        serialised = json.dumps(value)
 +        effective_ttl = ttl if ttl is not None else self.default_ttl
-+        # RACE: get-then-set not atomic — another writer could interleave
 +        existing = self.client.get(cache_key)
 +        if existing:
-+            self.client.expire(cache_key, effective_ttl)  # resets TTL only
++            self.client.expire(cache_key, effective_ttl)
 +            return False
 +        return bool(self.client.setex(cache_key, effective_ttl, serialised))
 +
 +    def invalidate(self, tenant_id: str, pattern: str = "*") -> int:
-+        # CRITICAL: uses KEYS command — O(N) on large keyspace, blocks Redis
 +        keys = self.client.keys(self._make_key(tenant_id, pattern))
 +        if keys:
 +            return self.client.delete(*keys)
@@ -345,14 +337,13 @@ HARD_PR = PullRequest(
 +        cached = self.get(tenant_id, key)
 +        if cached is not None:
 +            return cached
-+        # THUNDERING HERD: no lock — concurrent misses all invoke compute_fn
 +        value = compute_fn()
 +        self.set(tenant_id, key, value, ttl)
 +        return value
 +
 +    def write_through(self, tenant_id: str, key: str, value: Any,
 +                      db_write_fn: Callable, ttl: Optional[int] = None) -> bool:
-+        db_write_fn(value)  # DB write before cache — inconsistency if cache set fails
++        db_write_fn(value)
 +        return self.set(tenant_id, key, value, ttl)
 +
 +
@@ -361,7 +352,6 @@ HARD_PR = PullRequest(
 +    def decorator(fn):
 +        @wraps(fn)
 +        def wrapper(*args, **kwargs):
-+            # key includes all args — mutable types like dicts not hashable safely
 +            key = hashlib.md5(str(args) + str(kwargs)).hexdigest()
 +            return cache.get_or_compute(tenant_id, key, lambda: fn(*args, **kwargs), ttl)
 +        return wrapper
@@ -396,11 +386,6 @@ HARD_PR = PullRequest(
 +    cache.client.keys.return_value = [b"cache:tenant1:key1"]
 +    count = cache.invalidate("tenant1")
 +    assert count >= 0
-+
-+# Missing: test for tenant isolation (cross-tenant key access)
-+# Missing: test for thundering herd scenario
-+# Missing: test for write_through failure modes
-+# Missing: test for TTL race condition
 ''',
         ),
         CodeChange(
