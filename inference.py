@@ -1,5 +1,5 @@
-﻿"""
-inference.py - Baseline inference script for CodeReview OpenEnv.
+"""
+inference.py — Baseline inference script for CodeReview OpenEnv.
 
 Logging format (exact):
   [START] task=<difficulty> session=<id>
@@ -15,29 +15,44 @@ import time
 from typing import Any, Dict, List
 
 import requests
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from openai import OpenAI
 
+# ---------------------------------------------------------------------------
+# Configuration
+#   ✔ API_BASE_URL has a non-empty default  (your active HF Space URL)
+#   ✔ MODEL_NAME   has a non-empty default  (your active model)
+#   ✔ HF_TOKEN     has NO default           (injected by evaluator at runtime)
+# ---------------------------------------------------------------------------
+
 API_BASE_URL     = os.getenv("API_BASE_URL", "https://KrishnaAIX-KrishnaAIX.hf.space")
-MODEL_NAME       = os.getenv("MODEL_NAME",   "llama-3.3-70b-versatile")
+MODEL_NAME       = os.getenv("MODEL_NAME",   "meta-llama/Llama-3.3-70B-Instruct")
 HF_TOKEN         = os.getenv("HF_TOKEN")
-GROQ_API_KEY     = os.getenv("GROQ_API_KEY", HF_TOKEN)
+
+# Optional — only needed when running from a local Docker image
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-API_BASE_URL     = API_BASE_URL.rstrip("/")
-DIFFICULTIES     = ["easy", "medium", "hard"]
+
+API_BASE_URL = API_BASE_URL.rstrip("/")
+
+DIFFICULTIES = ["easy", "medium", "hard"]
+
+# ---------------------------------------------------------------------------
+# OpenAI client — configured entirely via the env vars above
+# ---------------------------------------------------------------------------
 
 client = OpenAI(
-    base_url="https://api.groq.com/openai/v1",
-    api_key=GROQ_API_KEY or "dummy",
+    base_url="https://api-inference.huggingface.co/v1",
+    api_key=HF_TOKEN,
 )
+
+# ---------------------------------------------------------------------------
+# Environment HTTP helpers
+# ---------------------------------------------------------------------------
 
 def env_reset(difficulty: str) -> Dict[str, Any]:
     r = requests.post(
         f"{API_BASE_URL}/reset",
         json={"task_difficulty": difficulty},
         timeout=30,
-        verify=False,
     )
     r.raise_for_status()
     return r.json()
@@ -48,42 +63,39 @@ def env_step(session_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         f"{API_BASE_URL}/step",
         json={"session_id": session_id, "action": action},
         timeout=30,
-        verify=False,
     )
     r.raise_for_status()
     return r.json()
 
 
+# ---------------------------------------------------------------------------
+# Agent prompts
+# ---------------------------------------------------------------------------
+
 SYSTEM_PROMPT = """\
 You are an expert software engineer performing a pull request code review.
-You will receive the PR diff and must identify ONLY real, critical bugs and security issues.
+You will receive the PR diff and must identify real bugs, security issues,
+and code quality problems.
 
-STRICT RULES:
-1. Add AT MOST 2 comments total - only for DEFINITE bugs or security issues with exact line numbers.
-2. If you are not 100% sure about an issue, do NOT add a comment.
-3. After adding comments (or if there are no issues), call set_review_decision ONCE.
-4. Then immediately call finish_review to end.
-5. Never add duplicate or speculative comments - each wrong comment costs -0.05.
-
-Response format - single JSON object, no markdown:
+For each step, respond with a single JSON object (no markdown fences):
 {
   "action_type": "add_comment" | "set_review_decision" | "finish_review",
   "comment": {
     "filename": "<file>",
     "line_number": <int>,
-    "severity": "critical",
-    "category": "security" | "correctness",
-    "message": "<specific bug description>",
-    "suggestion": "<exact fix>"
+    "severity": "info" | "warning" | "critical",
+    "category": "security" | "performance" | "correctness" | "style" | "maintainability" | "test_coverage",
+    "message": "<description of the issue>",
+    "suggestion": "<optional fix>"
   },
-  "decision": "request_changes" | "approve",
-  "reasoning": "<one sentence>"
+  "decision": "approve" | "request_changes" | "comment",
+  "reasoning": "<brief chain-of-thought>"
 }
 
-STRATEGY:
-- Step 1: Add 1-2 comments ONLY if you see a clear bug/security issue
-- Step 2: set_review_decision (request_changes if issues found, approve if clean)
-- Step 3: finish_review
+Rules:
+- Only comment on REAL issues visible in the diff — not hypothetical ones.
+- Set the review decision once, then call finish_review.
+- Be precise about line numbers from the diff (+lines shown).
 """
 
 
@@ -112,13 +124,6 @@ def build_user_message(obs: Dict[str, Any]) -> str:
     decision = obs.get("review_decision")
     decision_text = f"\nCurrent decision: {decision}" if decision else "\nNo decision set yet."
 
-    num_comments = len(comments_so_far)
-    urgency = ""
-    if num_comments >= 2:
-        urgency = "\nYou have added enough comments. NOW call set_review_decision, then finish_review."
-    elif decision:
-        urgency = "\nDecision is set. NOW call finish_review immediately."
-
     return (
         f"## Pull Request: {pr['title']}\n"
         f"**PR #{pr['pr_id']}** by {pr['author']} -> {pr['target_branch']}\n"
@@ -127,8 +132,7 @@ def build_user_message(obs: Dict[str, Any]) -> str:
         f"## Diffs\n{diff_text}\n\n"
         f"## Review Checklist (remaining)\n{checklist}\n"
         f"{comment_summary}\n"
-        f"{decision_text}\n"
-        f"{urgency}\n\n"
+        f"{decision_text}\n\n"
         f"Step {obs['step_number']}/{obs['max_steps']}. "
         f"Respond with a single JSON object."
     )
@@ -145,19 +149,16 @@ def parse_action(text: str) -> Dict[str, Any]:
         return {"action_type": "finish_review", "reasoning": "parse error"}
 
 
+# ---------------------------------------------------------------------------
+# Episode runner
+# ---------------------------------------------------------------------------
+
 def run_episode(difficulty: str) -> float:
-    # Always print START - even if everything fails
-    session_id = "error"
-    try:
-        reset_data = env_reset(difficulty)
-        session_id = reset_data["session_id"]
-        obs        = reset_data["observation"]
-        print(f"[START] task={difficulty} session={session_id}", flush=True)
-    except Exception as e:
-        print(f"[START] task={difficulty} session={session_id}", flush=True)
-        print(f"[STEP] step=1 action=finish_review reward=0.0 done=True", flush=True)
-        print(f"[END] task={difficulty} session={session_id} score=0.0000", flush=True)
-        return 0.0
+    reset_data  = env_reset(difficulty)
+    session_id  = reset_data["session_id"]
+    obs         = reset_data["observation"]
+
+    print(f"[START] task={difficulty} session={session_id}", flush=True)
 
     messages: List[Dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     done        = False
@@ -166,36 +167,23 @@ def run_episode(difficulty: str) -> float:
 
     while not done:
         step_num += 1
+        user_msg = build_user_message(obs)
+        messages.append({"role": "user", "content": user_msg})
 
-        if step_num > 6:
-            action = {"action_type": "finish_review", "reasoning": "max steps reached"}
-        else:
-            user_msg = build_user_message(obs)
-            messages.append({"role": "user", "content": user_msg})
+        try:
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                max_tokens=512,
+                temperature=0.1,
+            )
+            response_text = completion.choices[0].message.content or ""
+        except Exception as e:
+            print(f"[STEP] step={step_num} action=error reward=0.0 done=False", flush=True)
+            response_text = '{"action_type": "finish_review"}'
 
-            comments_so_far = obs.get("review_comments_so_far", [])
-            current_decision = obs.get("review_decision")
-
-            try:
-                completion = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    max_tokens=512,
-                    temperature=0.1,
-                )
-                response_text = completion.choices[0].message.content or ""
-            except Exception as e:
-                print(f"[STEP] step={step_num} action=error reward=0.0 done=False", flush=True)
-                response_text = '{"action_type": "finish_review", "reasoning": "llm unavailable"}'
-
-            messages.append({"role": "assistant", "content": response_text})
-            action = parse_action(response_text)
-
-            if current_decision and action.get("action_type") == "add_comment":
-                action = {"action_type": "finish_review", "reasoning": "decision already set"}
-
-            if len(comments_so_far) >= 3 and action.get("action_type") == "add_comment":
-                action = {"action_type": "finish_review", "reasoning": "enough comments"}
+        messages.append({"role": "assistant", "content": response_text})
+        action = parse_action(response_text)
 
         try:
             step_data = env_step(session_id, action)
@@ -227,6 +215,10 @@ def run_episode(difficulty: str) -> float:
     return final_score
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main() -> int:
     scores: Dict[str, float] = {}
 
@@ -237,9 +229,7 @@ def main() -> int:
         try:
             score = run_episode(difficulty)
         except Exception as e:
-            print(f"[START] task={difficulty} session=error", flush=True)
-            print(f"[STEP] step=1 action=finish_review reward=0.0 done=True", flush=True)
-            print(f"[END] task={difficulty} session=error score=0.0000", flush=True)
+            print(f"[END] task={difficulty} session=error score=0.0", flush=True)
             score = 0.0
         scores[difficulty] = score
 
