@@ -39,6 +39,8 @@ class ResetRequest(BaseModel):
     task_difficulty: str = "easy"
     session_id: Optional[str] = None
 
+    model_config = {"extra": "allow"}
+
 
 class ResetResponse(BaseModel):
     session_id: str
@@ -72,7 +74,9 @@ def health():
 
 
 @app.post("/reset", response_model=ResetResponse)
-def reset(req: ResetRequest):
+def reset(req: Optional[ResetRequest] = None):
+    if req is None:
+        req = ResetRequest()
     import uuid
     session_id = req.session_id or str(uuid.uuid4())
     try:
