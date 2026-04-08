@@ -1,0 +1,146 @@
+name: code-review-triage
+version: "1.0.0"
+description: >
+  A production-grade OpenEnv environment that simulates AI-assisted pull request
+  code review. The agent reads real-world diffs, identifies bugs and security
+  vulnerabilities, classifies issues by severity and category, and makes a
+  final review decision. Ground-truth graders score precision, recall, severity
+  calibration, and decision accuracy with dense, shaped rewards.
+
+author: "OpenEnv Code Review Team"
+license: MIT
+
+# -----------------------------------------------------------------------
+# Environment metadata
+# -----------------------------------------------------------------------
+environment:
+  class: environment.env.CodeReviewEnv
+  server: server:app
+  port: 7860
+
+# -----------------------------------------------------------------------
+# Action space
+# -----------------------------------------------------------------------
+action_space:
+  type: structured
+  schema: environment.models.Action
+  actions:
+    - name: add_comment
+      description: "Add a review comment to a specific file/line"
+      fields:
+        - comment: ReviewComment
+    - name: remove_comment
+      description: "Remove a previously added comment by index"
+      fields:
+        - comment_index: int
+    - name: set_review_decision
+      description: "Set the final review decision"
+      fields:
+        - decision: "approve | request_changes | comment"
+    - name: request_more_context
+      description: "Ask a clarifying question (costs one step)"
+      fields:
+        - question: str
+    - name: finish_review
+      description: "Submit the review and end the episode"
+
+# -----------------------------------------------------------------------
+# Observation space
+# -----------------------------------------------------------------------
+observation_space:
+  type: structured
+  schema: environment.models.Observation
+  fields:
+    - task_id: str
+    - task_difficulty: "easy | medium | hard"
+    - pull_request: PullRequest
+    - step_number: int
+    - max_steps: int
+    - review_comments_so_far: List[ReviewComment]
+    - review_decision: Optional[str]
+    - checklist_remaining: List[str]
+    - token_budget_remaining: int
+
+# -----------------------------------------------------------------------
+# Reward space
+# -----------------------------------------------------------------------
+reward:
+  type: structured
+  schema: environment.models.Reward
+  range: [-1.0, 1.0]
+  dense: true
+  components:
+    issue_detection:
+      weight: 0.40
+      description: "F1 score on ground-truth issue detection"
+    false_positives:
+      weight: 0.15
+      description: "Penalty for spurious/incorrect comments"
+    severity_calibration:
+      weight: 0.15
+      description: "Fraction of true positives with correct severity"
+    decision_accuracy:
+      weight: 0.20
+      description: "Whether review decision matches ground truth"
+    efficiency:
+      weight: 0.10
+      description: "Bonus for finishing in fewer steps"
+
+# -----------------------------------------------------------------------
+# Tasks
+# -----------------------------------------------------------------------
+tasks:
+  - id: easy
+    description: >
+      Review a Python authentication utility with 6 known issues including
+      hardcoded secrets, insecure MD5 password hashing, silent exception
+      swallowing, and missing tests. Issues are evident in a single file.
+    max_steps: 15
+    ground_truth_issues: 6
+    expected_score_range: [0.6, 1.0]
+
+  - id: medium
+    description: >
+      Review an asyncio-based data ingestion pipeline with 6 issues including
+      race conditions, improper asyncio.gather usage, resource leaks, and
+      inadequate test quality spanning two files.
+    max_steps: 20
+    ground_truth_issues: 6
+    expected_score_range: [0.4, 0.85]
+
+  - id: hard
+    description: >
+      Review a distributed Redis cache implementation with 8 issues including
+      multi-tenant key injection (CRITICAL), O(N) KEYS command usage, non-atomic
+      set operations, thundering herd, and write-through consistency bugs. Spans
+      three files including a SQL migration.
+    max_steps: 25
+    ground_truth_issues: 8
+    expected_score_range: [0.2, 0.75]
+
+# -----------------------------------------------------------------------
+# Validation endpoints
+# -----------------------------------------------------------------------
+validate:
+  health: GET /health
+  reset: POST /reset
+  step: POST /step
+  state: GET /state/{session_id}
+
+# -----------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------
+docker:
+  build: "docker build -t code-review-env ."
+  run: "docker run -p 7860:7860 code-review-env"
+
+# -----------------------------------------------------------------------
+# Inference
+# -----------------------------------------------------------------------
+inference:
+  script: inference.py
+  env_vars:
+    - API_BASE_URL
+    - MODEL_NAME
+    - HF_TOKEN
+    - OPENAI_API_KEY
