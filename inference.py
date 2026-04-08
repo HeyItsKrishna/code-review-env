@@ -1,4 +1,4 @@
-"""
+﻿"""
 inference.py — Baseline inference script for CodeReview OpenEnv.
 
 Logging format (exact):
@@ -15,44 +15,28 @@ import time
 from typing import Any, Dict, List
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from openai import OpenAI
-
-# ---------------------------------------------------------------------------
-# Configuration — checklist requirements:
-#   ✔ API_BASE_URL has a non-empty default  (your active HF Space URL)
-#   ✔ MODEL_NAME   has a non-empty default  (your active model)
-#   ✔ HF_TOKEN     has NO default           (injected by evaluator at runtime)
-# ---------------------------------------------------------------------------
 
 API_BASE_URL     = os.getenv("API_BASE_URL", "https://KrishnaAIX-KrishnaAIX.hf.space")
 MODEL_NAME       = os.getenv("MODEL_NAME",   "meta-llama/Llama-3.3-70B-Instruct")
 HF_TOKEN         = os.getenv("HF_TOKEN")
-
-# Optional — only needed when running from a local Docker image
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-
 API_BASE_URL = API_BASE_URL.rstrip("/")
-
 DIFFICULTIES = ["easy", "medium", "hard"]
-
-# ---------------------------------------------------------------------------
-# OpenAI client — configured entirely via the env vars above
-# ---------------------------------------------------------------------------
 
 client = OpenAI(
     base_url="https://api-inference.huggingface.co/v1",
     api_key=HF_TOKEN,
 )
 
-# ---------------------------------------------------------------------------
-# Environment HTTP helpers
-# ---------------------------------------------------------------------------
-
 def env_reset(difficulty: str) -> Dict[str, Any]:
     r = requests.post(
         f"{API_BASE_URL}/reset",
         json={"task_difficulty": difficulty},
         timeout=30,
+        verify=False,
     )
     r.raise_for_status()
     return r.json()
@@ -63,14 +47,11 @@ def env_step(session_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         f"{API_BASE_URL}/step",
         json={"session_id": session_id, "action": action},
         timeout=30,
+        verify=False,
     )
     r.raise_for_status()
     return r.json()
 
-
-# ---------------------------------------------------------------------------
-# Agent prompts
-# ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
 You are an expert software engineer performing a pull request code review.
@@ -149,10 +130,6 @@ def parse_action(text: str) -> Dict[str, Any]:
         return {"action_type": "finish_review", "reasoning": "parse error"}
 
 
-# ---------------------------------------------------------------------------
-# Episode runner
-# ---------------------------------------------------------------------------
-
 def run_episode(difficulty: str) -> float:
     reset_data  = env_reset(difficulty)
     session_id  = reset_data["session_id"]
@@ -214,10 +191,6 @@ def run_episode(difficulty: str) -> float:
     print(f"[END] task={difficulty} session={session_id} score={final_score:.4f}", flush=True)
     return final_score
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main() -> int:
     scores: Dict[str, float] = {}
